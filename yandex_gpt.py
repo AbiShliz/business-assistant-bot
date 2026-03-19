@@ -5,8 +5,8 @@
 
 import aiohttp
 import logging
+import json
 from typing import Optional
-from config import YANDEX_API_KEY, YANDEX_FOLDER_ID
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -33,9 +33,32 @@ async def ask_yandex_gpt(
         str: ответ от нейросети или сообщение об ошибке
     """
     
+    # Импортируем конфиг внутри функции, чтобы избежать циклических импортов
+    from config import YANDEX_API_KEY, YANDEX_FOLDER_ID
+    
+    # Проверяем, что ключи не пустые
+    if not YANDEX_API_KEY:
+        logger.error("YANDEX_API_KEY is empty!")
+        return "❌ Ошибка: не настроен API-ключ YandexGPT. Проверьте переменные окружения."
+    
+    if not YANDEX_FOLDER_ID:
+        logger.error("YANDEX_FOLDER_ID is empty!")
+        return "❌ Ошибка: не указан Folder ID. Проверьте переменные окружения."
+    
+    # Убираем возможные пробелы в начале и конце
+    api_key = YANDEX_API_KEY.strip()
+    folder_id = YANDEX_FOLDER_ID.strip()
+    
+    logger.info(f"Using folder_id: {folder_id}")
+    logger.info(f"API key length: {len(api_key)}")
+    
+    # Формируем modelUri
+    model_uri = f"gpt://{folder_id}/yandexgpt-lite"
+    logger.info(f"Model URI: {model_uri}")
+    
     # Заголовки запроса
     headers = {
-        "Authorization": f"Api-Key {YANDEX_API_KEY}",
+        "Authorization": f"Api-Key {api_key}",
         "Content-Type": "application/json"
     }
     
@@ -62,7 +85,7 @@ async def ask_yandex_gpt(
     
     # Тело запроса
     data = {
-        "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite",
+        "modelUri": model_uri,
         "completionOptions": {
             "stream": False,
             "temperature": temperature,
@@ -71,28 +94,58 @@ async def ask_yandex_gpt(
         "messages": messages
     }
     
+    logger.info(f"Sending request to YandexGPT with {len(messages)} messages")
+    
     try:
         # Отправляем запрос
         async with aiohttp.ClientSession() as session:
             async with session.post(YANDEX_URL, headers=headers, json=data) as response:
                 
+                # Логируем статус ответа
+                logger.info(f"Response status: {response.status}")
+                
                 if response.status == 200:
                     result = await response.json()
-                    answer = result['result']['alternatives'][0]['message']['text']
-                    return answer.strip()
+                    logger.info("Successfully got response from YandexGPT")
+                    
+                    # Извлекаем ответ
+                    try:
+                        answer = result['result']['alternatives'][0]['message']['text']
+                        return answer.strip()
+                    except (KeyError, IndexError) as e:
+                        logger.error(f"Failed to parse response: {e}")
+                        logger.error(f"Response structure: {json.dumps(result, indent=2)[:500]}")
+                        return "❌ Ошибка при обработке ответа от нейросети."
                 
                 else:
+                    # Подробный вывод ошибки
                     error_text = await response.text()
-                    logger.error(f"YandexGPT API error: {response.status} - {error_text}")
-                    return "❌ Извините, техническая ошибка. Попробуйте позже."
+                    logger.error(f"YandexGPT API error: {response.status}")
+                    logger.error(f"Error details: {error_text[:500]}")
+                    
+                    # Понятное сообщение для пользователя
+                    if response.status == 403:
+                        return "❌ Ошибка доступа к YandexGPT. Проверьте права сервисного аккаунта (роль ai.languageModels.user)."
+                    elif response.status == 401:
+                        return "❌ Ошибка авторизации. Неверный API-ключ."
+                    elif response.status == 429:
+                        return "❌ Превышен лимит запросов к YandexGPT. Попробуйте позже."
+                    elif response.status == 400:
+                        return f"❌ Неверный запрос к API. Проверьте Folder ID и модель. Детали: {error_text[:200]}"
+                    else:
+                        return f"❌ Ошибка YandexGPT (код {response.status}). Попробуйте позже."
+    
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"Connection error: {e}")
+        return "❌ Ошибка соединения с сервером YandexGPT. Проверьте интернет."
     
     except aiohttp.ClientError as e:
         logger.error(f"Network error: {e}")
-        return "❌ Ошибка соединения. Проверьте интернет."
+        return "❌ Ошибка сети при обращении к YandexGPT."
     
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        return "❌ Не удалось получить ответ. Попробуйте позже."
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        return f"❌ Непредвиденная ошибка: {str(e)}"
 
 async def generate_welcome(user_name: str) -> str:
     """
