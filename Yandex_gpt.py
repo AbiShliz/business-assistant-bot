@@ -46,6 +46,16 @@ async def ask_yandex_gpt(prompt: str, temperature: float = 0.6) -> str:
         logging.error(f"YandexGPT connection error: {e}")
         return "❌ Не удалось получить ответ. Попробуйте позже."
 
+async def generate_response(user_message: str, context: str = "") -> str:
+    """Упрощённая функция для ответов на вопросы"""
+    prompt = f"""
+Контекст: {context}
+Вопрос пользователя: {user_message}
+
+Ответь вежливо и полезно.
+"""
+    return await ask_yandex_gpt(prompt)
+
 async def generate_welcome(user_name: str) -> str:
     """Генерирует персонализированное приветствие"""
     prompt = f"Придумай короткое, тёплое приветствие для клиента {user_name}, который только что зашёл в бота салона красоты. Максимум 2 предложения."
